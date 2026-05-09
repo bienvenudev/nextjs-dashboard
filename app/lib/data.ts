@@ -9,8 +9,6 @@ import {
 } from "./definitions";
 import { formatCurrency } from "./utils";
 
-console.log('About to run revenue query, POSTGRES_URL=', process.env.POSTGRES_URL?.slice(0, 80));
-
 const sql = postgres(process.env.POSTGRES_URL!, { ssl: "require" });
 
 export async function fetchRevenue() {
