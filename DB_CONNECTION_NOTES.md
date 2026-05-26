@@ -158,3 +158,39 @@ Or bake it into your `package.json` so you don't forget:
 ```
 
 This is safe to leave on permanently — it just changes DNS *priority*, not which addresses are usable. IPv6 still works if it's available; it's just no longer tried first.
+
+## Final wrinkle: concurrent HTTPS requests can still flake
+
+Even with the IPv4-first flag, **launching many concurrent HTTPS requests to Neon from a single page render can still trigger sporadic `fetch failed` / `ETIMEDOUT`** on flaky networks.
+
+Symptom in this project: single-query functions like `fetchRevenue` (1 query) and `fetchLatestInvoices` (1 query) succeed reliably, but `fetchCardData` — which fires 3 queries via `Promise.all` — fails. The dashboard page renders all three components in parallel, so total concurrency on first paint is `1 + 1 + 3 = 5` HTTPS connections to the same Neon host opening at once. Something in Node's `undici` connection setup misbehaves under that concurrency on networks with broken IPv6, and one or more sockets time out.
+
+### The fix
+
+Serialize the queries inside the function. Replace:
+
+```ts
+const data = await Promise.all([
+  sql`SELECT COUNT(*) FROM invoices`,
+  sql`SELECT COUNT(*) FROM customers`,
+  sql`SELECT ... FROM invoices`,
+]);
+```
+
+with:
+
+```ts
+const invoiceCount = await sql`SELECT COUNT(*) FROM invoices`;
+const customerCount = await sql`SELECT COUNT(*) FROM customers`;
+const invoiceStatus = await sql`SELECT ... FROM invoices`;
+```
+
+You lose the parallelism, but each query only takes ~50-150ms over HTTPS so the user-perceived cost is small. On production (Vercel + Neon over IPv6-working network) you can switch back to `Promise.all` for the speedup.
+
+Alternative: **combine the three queries into one** with subqueries. One round trip, fastest, but loses the pedagogical demo of `Promise.all`.
+
+### Why this is OK for a learning project
+
+The tutorial uses `Promise.all` to teach a real JavaScript pattern. The pattern is correct — it's the underlying network that's broken on the dev machine. When the same code runs on Vercel (where IPv6 works and there's no network filtering), the `Promise.all` version works fine and is genuinely faster.
+
+The pattern: **debug code against your real deployment target, not just your laptop's network**. A Vercel preview deployment will often work when local dev doesn't, and that's not a bug in your code.
